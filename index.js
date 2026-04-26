@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // التوكن الخاص بنظام Quick Pay
-const AUTH_TOKEN = "d55191dccb450fc81a3f234de626cb07";
+const AUTH_TOKEN = "123456";
 let sock;
 let qrCodeData = null;
 let connectionStatus = "disconnected";
