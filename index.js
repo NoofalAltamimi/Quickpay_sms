@@ -7,6 +7,7 @@ const express = require("express");
 const qrcode = require("qrcode");
 const cors = require("cors");
 const pino = require("pino");
+const path = require("path"); // إضافة مكتبة المسارات
 
 const app = express();
 app.use(cors());
@@ -17,51 +18,68 @@ let sock;
 let qrCodeData = null;
 let connectionStatus = "disconnected";
 
+// تحديد مسار تخزين الجلسة بشكل مطلق لضمان عمله في هوستنجر
+const SESSION_PATH = path.join(__dirname, 'auth_info_baileys');
+
 async function connectToWhatsApp() {
-    // هوستنجر يحتاج مساراً مطلقاً أحياناً لضمان حفظ الملفات
-    const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
-    
-    sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ["QuickPay Gateway", "Chrome", "1.1.0"]
-    });
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
+        
+        sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'debug' }), // تفعيل الديبيج لمراقبة الخلل في الـ Logs
+            browser: ["QuickPay Gateway", "Chrome", "1.1.0"],
+            printQRInTerminal: false,
+            syncFullHistory: false 
+        });
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            qrCodeData = qr;
-            console.log("✅ QR Code Updated");
-        }
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            connectionStatus = "disconnected";
-            qrCodeData = null;
-            if (shouldReconnect) connectToWhatsApp();
-        } else if (connection === 'open') {
-            connectionStatus = "connected";
-            qrCodeData = null;
-        }
-    });
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                qrCodeData = qr;
+                console.log("✅ QR Code Updated");
+            }
+
+            if (connection === 'close') {
+                const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                connectionStatus = "disconnected";
+                qrCodeData = null;
+                console.log("❌ Connection closed, reconnecting:", shouldReconnect);
+                if (shouldReconnect) connectToWhatsApp();
+            } else if (connection === 'open') {
+                connectionStatus = "connected";
+                qrCodeData = null;
+                console.log("✅ WhatsApp Connected!");
+            }
+        });
+    } catch (err) {
+        console.error("🔥 Connection Error:", err);
+    }
 }
 
 const verifyToken = (req) => {
-    const headerToken = req.headers['authorization']?.replace('Bearer ', '');
+    const authHeader = req.headers['authorization']?.replace('Bearer ', '');
     const queryToken = req.query.token;
-    return headerToken === AUTH_TOKEN || queryToken === AUTH_TOKEN;
+    return authHeader === AUTH_TOKEN || queryToken === AUTH_TOKEN;
 };
 
-// المسار الذكي: ينتظر الباركود إذا لم يكن جاهزاً
 app.all("/devices/:id/qr", async (req, res) => {
     if (!verifyToken(req)) return res.status(200).json({ error: "unauthorized" });
 
     if (connectionStatus === "connected") return res.status(200).json({ status: "already_connected" });
 
-    // محاولة الانتظار لمدة 5 ثوانٍ إذا كان الباركود غير موجود
+    // إذا لم يتولد الـ QR بعد، نحاول إعادة تشغيل الاتصال للتنشيط
+    if (!qrCodeData && connectionStatus === "disconnected") {
+        console.log("🔄 Triggering new connection for QR...");
+        // connectToWhatsApp(); // اختياري: إذا أردت إجبار الاتصال
+    }
+
+    // انتظار بسيط للاستجابة
     let attempts = 0;
-    while (!qrCodeData && attempts < 5) {
+    while (!qrCodeData && attempts < 10) { // رفع المحاولات لـ 10 ثوانٍ
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
     }
@@ -75,15 +93,17 @@ app.all("/devices/:id/qr", async (req, res) => {
         }
     }
 
-    // إذا استمر الفشل، نرسل رد "جاري التحميل" بدلاً من null صريح
     return res.status(200).json({ 
         qr: null, 
         status: "loading", 
-        message: "QR is being generated, please try again in 10 seconds" 
+        message: "QR generation taking longer than expected. Please refresh in 15 seconds." 
     });
 });
 
 app.get("/status", (req, res) => res.json({ status: connectionStatus }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => connectToWhatsApp());
+app.listen(PORT, () => {
+    console.log(`🚀 Server on port ${PORT}`);
+    connectToWhatsApp();
+});
