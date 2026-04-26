@@ -1,18 +1,21 @@
 const { 
     default: makeWASocket, 
     useMultiFileAuthState, 
-    DisconnectReason, 
-    delay 
+    DisconnectReason 
 } = require("@whiskeysockets/baileys");
 const express = require("express");
 const qrcode = require("qrcode");
+const cors = require("cors");
 const pino = require("pino");
 
 const app = express();
+
+// تفعيل CORS للسماح لتطبيق Lovable بالوصول للخادم
+app.use(cors());
 app.use(express.json());
 
-// التوكن السري - يفضل تغييره أو استخدامه من متغيرات البيئة
-const AUTH_TOKEN = process.env.AUTH_TOKEN || "d55191dccb450fc81a3f234de626cb07";
+// التوكن السري (تأكد من مطابقته في إعدادات التطبيق)
+const AUTH_TOKEN = "d55191dccb450fc81a3f234de626cb07";
 
 let sock;
 let qrCodeData = null;
@@ -24,7 +27,7 @@ async function connectToWhatsApp() {
     sock = makeWASocket({
         auth: state,
         printQRInTerminal: true,
-        logger: pino({ level: 'silent' }), // تقليل السجلات لزيادة السرعة
+        logger: pino({ level: 'silent' }),
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -48,11 +51,13 @@ async function connectToWhatsApp() {
     });
 }
 
-// 1. مسار جلب الـ QR Code كصورة Base64
+// 1. مسار جلب الـ QR Code (المسار الذي يطلبه التطبيق)
 app.get("/devices/:id/qr", async (req, res) => {
-    // التحقق من التوكن
+    // التحقق من التوكن في الـ Header
     const authHeader = req.headers['authorization'];
-    if (authHeader !== `Bearer ${AUTH_TOKEN}`) return res.status(401).json({ error: "Unauthorized" });
+    if (authHeader !== `Bearer ${AUTH_TOKEN}`) {
+        return res.status(401).json({ error: "Unauthorized - Token Mismatch" });
+    }
 
     if (connectionStatus === "connected") {
         return res.json({ status: "already_connected" });
@@ -61,16 +66,17 @@ app.get("/devices/:id/qr", async (req, res) => {
     if (qrCodeData) {
         try {
             const qrImage = await qrcode.toDataURL(qrCodeData);
+            // إرسال الـ QR كـ Base64 ليعرضه التطبيق فوراً
             return res.json({ qr: qrImage });
         } catch (err) {
-            return res.status(500).json({ error: "Failed to generate QR image" });
+            return res.status(500).json({ error: "Failed to generate QR" });
         }
     } else {
-        return res.status(404).json({ error: "QR not ready yet, please retry in seconds" });
+        return res.status(404).json({ error: "QR not ready, please wait..." });
     }
 });
 
-// 2. مسار إرسال الرسائل (OTP / Notifications)
+// 2. مسار إرسال الرسائل
 app.post("/send", async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (authHeader !== `Bearer ${AUTH_TOKEN}`) return res.status(401).json({ error: "Unauthorized" });
@@ -82,18 +88,16 @@ app.post("/send", async (req, res) => {
     }
 
     try {
-        // تهيئة الرقم الدولي (إزالة أي رموز غير رقمية وإضافة JID)
         const cleanNumber = number.replace(/\D/g, '');
         const jid = `${cleanNumber}@s.whatsapp.net`;
-
         await sock.sendMessage(jid, { text: message });
-        res.json({ status: "success", to: cleanNumber });
+        res.json({ status: "success" });
     } catch (err) {
         res.status(500).json({ status: "error", error: err.message });
     }
 });
 
-// مسار لفحص حالة الخادم (Health Check)
+// مسار فحص الحالة
 app.get("/status", (req, res) => {
     res.json({ status: connectionStatus });
 });
