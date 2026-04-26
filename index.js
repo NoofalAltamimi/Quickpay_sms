@@ -18,20 +18,25 @@ let qrCodeData = null;
 let connectionStatus = "disconnected";
 
 async function connectToWhatsApp() {
-    // استخدام مجلد مؤقت لكل محاولة لضمان عدم تعليق الجلسة
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true, // سيظهر الـ QR في سجلات Render أيضاً
+        // تم إزالة printQRInTerminal لتجنب التنبيه
         logger: pino({ level: 'silent' }),
+        browser: ["QuickPay Gateway", "Chrome", "1.0.0"] // تعريف المتصفح لتجنب الحظر
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) qrCodeData = qr;
+        
+        // هنا نقوم بالاستماع للـ QR يدوياً كما طلبت المكتبة
+        if (qr) {
+            qrCodeData = qr;
+            console.log('📡 New QR Code generated, waiting for scan...');
+        }
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -41,11 +46,10 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             connectionStatus = "connected";
             qrCodeData = null;
-            console.log('✅ Connected!');
+            console.log('✅ WhatsApp Connected Successfully!');
         }
     });
 }
-
 // مسار الـ QR المعدل (انتظار الاستجابة)
 app.get("/devices/:id/qr", async (req, res) => {
     const authHeader = req.headers['authorization'];
