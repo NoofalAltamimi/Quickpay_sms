@@ -72,7 +72,7 @@ app.get("/devices/:id/qr", async (req, res) => {
             return res.status(500).json({ error: "Failed to generate QR" });
         }
     } else {
-        return res.status(404).json({ error: "QR not ready, please wait..." });
+        return res.status(200).json({ status: "processing", message: "QR generating, please refresh" });
     }
 });
 
