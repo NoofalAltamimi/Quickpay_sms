@@ -12,6 +12,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// التوكن الخاص بنظام Quick Pay
 const AUTH_TOKEN = "d55191dccb450fc81a3f234de626cb07";
 let sock;
 let qrCodeData = null;
@@ -22,20 +23,20 @@ async function connectToWhatsApp() {
     
     sock = makeWASocket({
         auth: state,
-        // تم إزالة printQRInTerminal لتجنب التنبيه
+        // تم حذف printQRInTerminal لحل التنبيه
         logger: pino({ level: 'silent' }),
-        browser: ["QuickPay Gateway", "Chrome", "1.0.0"] // تعريف المتصفح لتجنب الحظر
+        browser: ["QuickPay Gateway", "Chrome", "1.0.0"]
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // هنا نقوم بالاستماع للـ QR يدوياً كما طلبت المكتبة
+        // استلام الـ QR ومعالجته يدوياً كما طلبت المكتبة
         if (qr) {
             qrCodeData = qr;
-            console.log('📡 New QR Code generated, waiting for scan...');
+            console.log("📡 QR Code received and ready for fetch.");
         }
 
         if (connection === 'close') {
@@ -46,33 +47,30 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             connectionStatus = "connected";
             qrCodeData = null;
-            console.log('✅ WhatsApp Connected Successfully!');
+            console.log('✅ WhatsApp Connected Successfully');
         }
     });
 }
-// مسار الـ QR المعدل (انتظار الاستجابة)
+
+// مسار جلب الـ QR (المسار الذي يطلبه تطبيقك في الصورة)
 app.get("/devices/:id/qr", async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (authHeader !== `Bearer ${AUTH_TOKEN}`) return res.status(401).json({ error: "Unauthorized" });
 
     if (connectionStatus === "connected") return res.json({ status: "already_connected" });
 
-    // إذا لم يتوفر QR بعد، سننتظر 3 ثوانٍ قبل الرد بـ 404
-    if (!qrCodeData) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-
+    // إذا كان الـ QR جاهزاً، أرسله فوراً
     if (qrCodeData) {
         try {
             const qrImage = await qrcode.toDataURL(qrCodeData);
             return res.json({ qr: qrImage });
         } catch (err) {
-            return res.status(500).json({ error: "QR Error" });
+            return res.status(500).json({ error: "QR Generation Failed" });
         }
     }
 
-    // بدلاً من 404 الصريح، سنرسل 200 مع رسالة "قيد التجهيز"
-    res.status(200).json({ qr: null, status: "loading", message: "Please refresh in 5 seconds" });
+    // إذا لم يجهز بعد، نرسل حالة انتظار بدلاً من 404 لكي لا يظهر خطأ في التطبيق
+    res.status(200).json({ status: "loading", message: "Generating QR, try again in 5s" });
 });
 
 app.post("/send", async (req, res) => {
@@ -90,6 +88,6 @@ app.post("/send", async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-    connectToWhatsApp();
-});
+app.get("/status", (req, res) => res.json({ status: connectionStatus }));
+
+app.listen(process.env.PORT || 3000, () => connectToWhatsApp());
