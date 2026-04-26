@@ -12,8 +12,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// التوكن الخاص بنظام Quick Pay
-const AUTH_TOKEN = "123456";
+// التوكن الخاص بك
+const AUTH_TOKEN = "d55191dccb450fc81a3f234de626cb07";
 let sock;
 let qrCodeData = null;
 let connectionStatus = "disconnected";
@@ -23,21 +23,15 @@ async function connectToWhatsApp() {
     
     sock = makeWASocket({
         auth: state,
-        // تم حذف printQRInTerminal لحل التنبيه
         logger: pino({ level: 'silent' }),
         browser: ["QuickPay Gateway", "Chrome", "1.0.0"]
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
-        // استلام الـ QR ومعالجته يدوياً كما طلبت المكتبة
-        if (qr) {
-            qrCodeData = qr;
-            console.log("📡 QR Code received and ready for fetch.");
-        }
+        if (qr) qrCodeData = qr;
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -47,47 +41,40 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             connectionStatus = "connected";
             qrCodeData = null;
-            console.log('✅ WhatsApp Connected Successfully');
+            console.log('✅ WhatsApp Connected');
         }
     });
 }
 
-// مسار جلب الـ QR (المسار الذي يطلبه تطبيقك في الصورة)
+// دالة التحقق من التوكن (تدعم الـ Header والـ URL)
+const verifyToken = (req) => {
+    const headerToken = req.headers['authorization']?.replace('Bearer ', '');
+    const queryToken = req.query.token;
+    return headerToken === AUTH_TOKEN || queryToken === AUTH_TOKEN;
+};
+
+// مسار جلب الـ QR
 app.get("/devices/:id/qr", async (req, res) => {
-    const authHeader = req.headers['authorization'];
-    if (authHeader !== `Bearer ${AUTH_TOKEN}`) return res.status(401).json({ error: "Unauthorized" });
+    if (!verifyToken(req)) {
+        return res.status(401).json({ error: "Unauthorized - Check your Token" });
+    }
 
     if (connectionStatus === "connected") return res.json({ status: "already_connected" });
 
-    // إذا كان الـ QR جاهزاً، أرسله فوراً
     if (qrCodeData) {
         try {
             const qrImage = await qrcode.toDataURL(qrCodeData);
             return res.json({ qr: qrImage });
         } catch (err) {
-            return res.status(500).json({ error: "QR Generation Failed" });
+            return res.status(500).json({ error: "QR Fail" });
         }
     }
 
-    // إذا لم يجهز بعد، نرسل حالة انتظار بدلاً من 404 لكي لا يظهر خطأ في التطبيق
-    res.status(200).json({ status: "loading", message: "Generating QR, try again in 5s" });
-});
-
-app.post("/send", async (req, res) => {
-    const authHeader = req.headers['authorization'];
-    if (authHeader !== `Bearer ${AUTH_TOKEN}`) return res.status(401).json({ error: "Unauthorized" });
-    const { number, message } = req.body;
-    if (connectionStatus !== "connected") return res.status(503).json({ error: "Disconnected" });
-
-    try {
-        const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
-        await sock.sendMessage(jid, { text: message });
-        res.json({ status: "success" });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    // نرسل حالة 200 دائماً مع رسالة انتظار لتجنب 404 في التطبيق
+    res.status(200).json({ qr: null, status: "loading", message: "Please wait, generating QR..." });
 });
 
 app.get("/status", (req, res) => res.json({ status: connectionStatus }));
 
-app.listen(process.env.PORT || 3000, () => connectToWhatsApp());
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => connectToWhatsApp());
